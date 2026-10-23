@@ -870,7 +870,8 @@ var G = {
 
   /* combat mode */
   health: 100, maxHealth: 100, lastDamageT: -99, damageFlash: 0, dead: false,
-  combat: null, enemyShots: [], killFeed: [], bannerT: 0, bannerText: ''
+  combat: null, enemyShots: [], killFeed: [], bannerT: 0, bannerText: '',
+  pickups: [], hitDir: 0, hitDirT: 0, victory: false
 };
 
 /* ================================================================
@@ -1239,6 +1240,7 @@ function startRun() {
   camPos[0] = 0; camPos[1] = MOVE.eyeStand; camPos[2] = 0;
   G.health = G.maxHealth; G.dead = false; G.lastDamageT = -99; G.damageFlash = 0;
   G.enemyShots.length = 0; G.killFeed.length = 0; G.bannerT = 0; G.bannerText = '';
+  G.pickups.length = 0; G.hitDir = 0; G.hitDirT = 0; G.victory = false;
   G.state = 'playing';
   if (G.mode === 'combat') {
     G.combat = { wave: 0, kills: 0, waveKills: 0, spawnLeft: 0, spawnT: 0, breakT: 0, waveEnded: false };
@@ -1300,7 +1302,8 @@ function endRun() {
 
   var acc = G.shots ? (G.hits / G.shots * 100) : 0;
   var hd = G.hits ? (G.heads / G.hits * 100) : 0;
-  $('overTitle').textContent = (G.dead ? '阵亡 · 实战演练' : MODES[G.mode].name) + ' · 结算';
+  $('overTitle').textContent = (G.victory ? '撤离成功 · 实战演练'
+    : (G.dead ? '阵亡 · 实战演练' : MODES[G.mode].name)) + ' · 结算';
   $('rHp').textContent = fmt1(G.hpDamage);
   $('rAp').textContent = fmt1(G.apDamage);
   $('rAcc').textContent = acc.toFixed(1) + '%';
@@ -1317,8 +1320,14 @@ function endRun() {
   else if (G.heads / Math.max(1, G.hits) > 0.18) note += ' 爆头率不错，可以尝试极限速射。';
   else note += ' 连续射击时注意弹道整体上抬 + 右偏，压枪要把准心往左下带。';
   if (G.combat) {
-    note = (G.dead ? '你在第 ' + G.combat.wave + ' 波阵亡。' : '完成实战演练。') +
-      ' 击倒 ' + G.combat.kills + ' 名敌人，抵达第 ' + G.combat.wave + ' 波。' + note;
+    var oldWave = 0;
+    try { oldWave = parseInt(localStorage.getItem('delta_best_wave') || '0', 10) || 0; } catch (e) { }
+    var bestWave = Math.max(oldWave, G.combat.wave);
+    try { localStorage.setItem('delta_best_wave', String(bestWave)); } catch (e) { }
+    note = (G.victory ? '你清除了全部 10 波敌人，成功撤离。'
+      : (G.dead ? '你在第 ' + G.combat.wave + ' 波阵亡。' : '完成实战演练。')) +
+      ' 击倒 ' + G.combat.kills + ' 名敌人，抵达第 ' + G.combat.wave + ' 波（历史最高第 ' + bestWave + ' 波）。' +
+      ' 提示：滑铲、跳跃和动力推进都能降低被命中的概率。';
   }
   $('rNote').textContent = note;
 }
@@ -1344,7 +1353,8 @@ function toMenu() {
   G.weapon = 'gun'; G.swapT = 0; G.keys = {};
   camPos[0] = 0; camPos[1] = MOVE.eyeStand; camPos[2] = 0;
   G.combat = null; G.health = G.maxHealth; G.dead = false;
-  G.enemyShots.length = 0; G.killFeed.length = 0;
+  G.enemyShots.length = 0; G.killFeed.length = 0; G.pickups.length = 0;
+  G.hitDirT = 0; G.victory = false;
 }
 
 /* ================================================================
@@ -1533,6 +1543,9 @@ function hitTarget(hit, b, focal, sx, sy) {
       G.combat.kills++;
       G.combat.waveKills++;
       addKillFeed('击倒敌人  +1');
+      if (Math.random() < 0.38) {
+        G.pickups.push({ x: tg.x, z: tg.z, y: 0.55, life: 22, bob: rand(0, TAU) });
+      }
     }
     /* 威龙：击倒刷新动力推进（这里折半冷却） */
     if (G.jetCD > 0) G.jetCD *= 0.5;
@@ -1834,6 +1847,10 @@ function damagePlayer(dmg, src) {
   G.health -= dmg;
   G.lastDamageT = nowS();
   G.damageFlash = 1;
+  if (src) {
+    G.hitDir = Math.atan2(src.x - G.px, -(src.z - G.pz)) - G.yaw;
+    G.hitDirT = 0.95;
+  }
   G.shake = Math.min(1, G.shake + 0.35);
   SND.playerHit();
   if (G.health <= 0) {
@@ -1878,6 +1895,14 @@ function updateCombat(dt) {
   }
   if (c.spawnLeft <= 0 && alive === 0 && !c.waveEnded) {
     c.waveEnded = true;
+    if (c.wave >= 10) {
+      G.victory = true;
+      G.bannerT = 2.6;
+      G.bannerText = '全部波次清除';
+      SND.wave();
+      setTimeout(function () { if (G.state === 'playing') endRun(); }, 900);
+      return;
+    }
     c.breakT = 3.2;
     G.bannerT = 1.5;
     G.bannerText = '波次清除';
@@ -1890,6 +1915,23 @@ function updateCombat(dt) {
 
   if (G.health < G.maxHealth && nowS() - G.lastDamageT > 6) {
     G.health = Math.min(G.maxHealth, G.health + 6 * dt);
+  }
+
+  G.hitDirT = Math.max(0, G.hitDirT - dt);
+  var now = nowS();
+  for (var pi = G.pickups.length - 1; pi >= 0; pi--) {
+    var pk = G.pickups[pi];
+    pk.life -= dt;
+    pk.y = 0.55 + Math.sin(now * 2.6 + pk.bob) * 0.08;
+    var pd = Math.hypot(pk.x - G.px, pk.z - G.pz);
+    if (pd < 1.45 && G.health < G.maxHealth) {
+      G.health = Math.min(G.maxHealth, G.health + 28);
+      G.pickups.splice(pi, 1);
+      addKillFeed('医疗包  +28');
+      SND.ping(true);
+    } else if (pk.life <= 0) {
+      G.pickups.splice(pi, 1);
+    }
   }
 }
 
@@ -2068,6 +2110,7 @@ function render(now) {
   drawLights(b, focal);
   drawTracerAndLaser(b, focal);
   drawEnemyShots(b, focal);
+  drawPickups(b, focal);
   drawParticles();
   drawNumbers();
   ctx.restore();
@@ -2526,6 +2569,18 @@ function drawTarget(t, b, focal, now) {
                     clamp(134 * lit * k | 0, 0, 255) + ',' +
                     clamp(110 * lit * k | 0, 0, 255) + ')';
   };
+  if (t.hostile) {
+    tan = function (k) {
+      return 'rgb(' + clamp(126 * lit * k | 0, 0, 255) + ',' +
+                      clamp(86 * lit * k | 0, 0, 255) + ',' +
+                      clamp(78 * lit * k | 0, 0, 255) + ')';
+    };
+    vest = function (k) {
+      return 'rgb(' + clamp(92 * lit * k | 0, 0, 255) + ',' +
+                      clamp(58 * lit * k | 0, 0, 255) + ',' +
+                      clamp(56 * lit * k | 0, 0, 255) + ')';
+    };
+  }
   var dark = 'rgba(' + (26 * lit + 8 | 0) + ',' + (28 * lit + 8 | 0) + ',' + (26 * lit + 8 | 0) + ',1)';
 
   var wUnit = s;
@@ -2641,7 +2696,9 @@ function drawTarget(t, b, focal, now) {
   ctx.ellipse(0, -1.655 * wUnit, 0.072 * wUnit, 0.068 * wUnit, 0, 0, TAU);
   ctx.fill();
   /* visor glint */
-  ctx.fillStyle = 'rgba(' + (150 * lit + 20 | 0) + ',' + (160 * lit + 20 | 0) + ',' + (140 * lit + 20 | 0) + ',.55)';
+  ctx.fillStyle = t.hostile
+    ? 'rgba(255,64,42,.85)'
+    : 'rgba(' + (150 * lit + 20 | 0) + ',' + (160 * lit + 20 | 0) + ',' + (140 * lit + 20 | 0) + ',.55)';
   ctx.fillRect(-0.055 * wUnit, -1.675 * wUnit, 0.11 * wUnit, 0.014 * wUnit);
 
   /* side shading */
@@ -2782,6 +2839,37 @@ function drawCombatOverlay() {
     ctx.fillRect(0, 0, W, H);
   }
 
+  /* damage direction */
+  if (G.hitDirT > 0) {
+    var ha = clamp(G.hitDirT / 0.95, 0, 1);
+    var hx = W / 2, hy = H / 2;
+    var R = Math.min(W, H) * 0.33;
+    var ang = -Math.PI / 2 + G.hitDir;
+    ctx.save();
+    ctx.globalAlpha = ha * 0.9;
+    ctx.strokeStyle = 'rgba(255,80,55,.9)';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(hx, hy, R, ang - 0.20, ang + 0.20);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,180,150,.35)';
+    ctx.lineWidth = 12;
+    ctx.beginPath();
+    ctx.arc(hx, hy, R + 9, ang - 0.16, ang + 0.16);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /* low health pulse */
+  if (G.combat && G.health > 0 && G.health < 32) {
+    var pulse = 0.10 + Math.abs(Math.sin(G.swayT * 3.4)) * 0.10;
+    var lh = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.30, W / 2, H / 2, Math.max(W, H) * 0.72);
+    lh.addColorStop(0, 'rgba(150,10,5,0)');
+    lh.addColorStop(1, 'rgba(150,10,5,' + pulse.toFixed(3) + ')');
+    ctx.fillStyle = lh;
+    ctx.fillRect(0, 0, W, H);
+  }
+
   /* wave banner */
   if (G.bannerT > 0) {
     var a = clamp(G.bannerT / 0.5, 0, 1) * clamp((2.2 - G.bannerT) / 0.25, 0, 1);
@@ -2812,6 +2900,37 @@ function drawCombatOverlay() {
     ctx.shadowColor = 'rgba(0,0,0,.9)';
     ctx.shadowBlur = 5;
     ctx.fillText(k.text, W - 26, 104 + i * 24);
+    ctx.restore();
+  }
+}
+
+
+function drawPickups(b, focal) {
+  for (var i = 0; i < G.pickups.length; i++) {
+    var pk = G.pickups[i];
+    var p = projectPoint([pk.x, pk.y, pk.z], b, focal);
+    if (!p) continue;
+    var s = focal / Math.max(1.5, -pk.z);
+    var r = Math.max(3, 0.10 * s);
+    var pulse = 0.7 + Math.sin(G.swayT * 4 + pk.bob) * 0.3;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 6);
+    g.addColorStop(0, 'rgba(120,255,180,' + (0.55 * pulse).toFixed(2) + ')');
+    g.addColorStop(0.35, 'rgba(60,220,140,.18)');
+    g.addColorStop(1, 'rgba(40,200,120,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r * 6, 0, TAU); ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.fillStyle = 'rgba(150,255,195,.95)';
+    ctx.shadowColor = 'rgba(80,255,160,.9)';
+    ctx.shadowBlur = r * 2;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, TAU); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(180,255,210,.65)';
+    ctx.lineWidth = Math.max(1, r * 0.22);
+    ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.1, 0, TAU); ctx.stroke();
     ctx.restore();
   }
 }
@@ -3881,6 +4000,7 @@ window.__range = {
   swap: switchWeapon,
   knife: knifeAttack,
   jump: jump,
+  damage: damagePlayer,
   G: G,
   snd: SND
 };
