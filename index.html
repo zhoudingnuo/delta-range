@@ -850,7 +850,7 @@ var GUN = {
   reloadTime: 1.95,
   spreadHip: 0.0085,
   spreadAds: 0.0018,
-  adsFov: 50,
+  adsFov: 62,
   hipFov: 72,
   adsKick: 0.55,
   adsSens: 0.6,
@@ -3162,7 +3162,7 @@ function drawWeapon(b, focal) {
   }
 
   /* camera-space rig */
-  var origin = V3.lerp([0.140, -0.158, 0.55], [0.0, -0.218, 0.60], ads);
+  var origin = V3.lerp([0.140, -0.158, 0.55], [0.0, -0.228, 0.60], ads);
   origin[0] += kick * 0.006 + lower * 0.012;
   origin[1] -= kick * 0.006 + lower * 0.11;
   origin[2] -= kick * 0.022;
@@ -3243,20 +3243,20 @@ function drawWeapon(b, focal) {
   box(0.044, 0.062, 0.050, 0.074, -0.020, 0.085, [58, 68, 76]);
 
   /* ---- optic ---- */
-  box(-0.030, 0.030, 0.140, 0.152, 0.090, 0.280, [18, 22, 25]);
+  box(-0.045, 0.045, 0.140, 0.152, 0.090, 0.280, [18, 22, 25]);
   /* frameless glass: thin side/top/bottom housing + clear pane */
-  box(-0.041, -0.031, 0.152, 0.244, 0.095, 0.275, [30, 36, 40]);
-  box(0.031, 0.041, 0.152, 0.244, 0.095, 0.275, [30, 36, 40]);
-  box(-0.031, 0.031, 0.234, 0.244, 0.095, 0.275, [26, 31, 35]);
-  box(-0.031, 0.031, 0.152, 0.162, 0.095, 0.275, [26, 31, 35]);
-  box(-0.041, 0.041, 0.232, 0.252, 0.090, 0.112, [14, 17, 19]);
+  box(-0.070, -0.056, 0.152, 0.244, 0.095, 0.275, [54, 60, 65]);
+  box(0.056, 0.070, 0.152, 0.244, 0.095, 0.275, [54, 60, 65]);
+  box(-0.056, 0.056, 0.234, 0.244, 0.095, 0.275, [46, 52, 57]);
+  box(-0.056, 0.056, 0.152, 0.162, 0.095, 0.275, [46, 52, 57]);
+  box(-0.072, 0.072, 0.232, 0.252, 0.090, 0.112, [14, 17, 19]);
   /* the pane itself — translucent */
-  quad([[-0.031, 0.162, 0.269], [0.031, 0.162, 0.269], [0.031, 0.234, 0.269], [-0.031, 0.234, 0.269]], [150, 215, 225], { alpha: 0.16, edge: false });
+  quad([[-0.056, 0.162, 0.269], [0.056, 0.162, 0.269], [0.056, 0.234, 0.269], [-0.056, 0.234, 0.269]], [150, 215, 225], { alpha: 0.05, edge: false });
   /* green reticle etched in the glass */
-  quad([[-0.009, 0.190, 0.270], [0.009, 0.190, 0.270], [0.009, 0.212, 0.270], [-0.009, 0.212, 0.270]], [110, 255, 172], { glow: true, edge: false, alpha: clamp(1 - G.adsT * 3, 0, 1) * 0.95 });
+  quad([[-0.005, 0.193, 0.270], [0.005, 0.193, 0.270], [0.005, 0.203, 0.270], [-0.005, 0.203, 0.270]], [255, 70, 50], { glow: true, edge: false, alpha: clamp(1 - G.adsT * 3, 0, 1) * 0.95 });
   /* optic knobs */
-  box(0.037, 0.052, 0.178, 0.206, 0.120, 0.156, [46, 54, 60]);
-  box(-0.048, -0.037, 0.180, 0.204, 0.130, 0.162, [40, 47, 52]);
+  box(0.070, 0.086, 0.178, 0.206, 0.120, 0.156, [46, 54, 60]);
+  box(-0.086, -0.070, 0.180, 0.204, 0.130, 0.162, [40, 47, 52]);
 
   /* ---- magazine (raked forward) ---- */
   (function () {
@@ -3311,6 +3311,9 @@ function drawWeapon(b, focal) {
       cs.push(p); zsum += p[2];
     }
     if (!ok) return;
+    var zAvg = zsum / points.length;
+    /* 开镜时剔除贴近镜头的枪托/后部面，避免形成半透明大遮罩 */
+    if (G.adsT > 0.45 && zAvg < 0.34) return;
     var n = normal;
     if (!n) {
       var ax = points[1][0] - points[0][0], ay = points[1][1] - points[0][1], az = points[1][2] - points[0][2];
@@ -3418,7 +3421,7 @@ function drawWeapon(b, focal) {
     G.muzzle.scale = 1;
   }
 
-  var gunAlpha = clamp(1 - ads * 0.55, 0.42, 1);
+  var gunAlpha = clamp(1 - ads * 0.12, 0.88, 1);
   gunAlpha *= (1 - 0.86 * jetLower) * (1 - 0.55 * swapDrop);
   ctx.globalAlpha = gunAlpha;
   if (gunAlpha <= 0.03) { ctx.restore(); return; }
@@ -3677,24 +3680,19 @@ function drawReticle() {
   var ads = G.adsT;
 
   if (ads > 0.34) {
-    /* holo reticle: green chevron + ring + center dot */
+    /* clean red dot */
     ctx.save();
     ctx.globalAlpha = clamp((ads - 0.34) / 0.18, 0, 1);
-    var r = 19;
-    ctx.strokeStyle = 'rgba(110,255,172,.55)';
-    ctx.lineWidth = 1.3;
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
-    ctx.strokeStyle = 'rgba(130,255,185,.95)';
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.moveTo(cx - 8, cy + 7); ctx.lineTo(cx, cy - 7); ctx.lineTo(cx + 8, cy + 7);
-    ctx.stroke();
-    ctx.fillStyle = 'rgba(165,255,205,.98)';
-    ctx.beginPath(); ctx.arc(cx, cy + 1, 1.9, 0, TAU); ctx.fill();
-    /* small holdover dots */
-    ctx.fillStyle = 'rgba(120,255,170,.55)';
-    ctx.beginPath(); ctx.arc(cx, cy + 15, 1.2, 0, TAU); ctx.fill();
-    ctx.beginPath(); ctx.arc(cx, cy + 23, 1.1, 0, TAU); ctx.fill();
+    var gd = ctx.createRadialGradient(cx, cy, 0, cx, cy, 11);
+    gd.addColorStop(0, 'rgba(255,80,55,.95)');
+    gd.addColorStop(0.32, 'rgba(255,46,30,.45)');
+    gd.addColorStop(1, 'rgba(255,40,20,0)');
+    ctx.fillStyle = gd;
+    ctx.beginPath(); ctx.arc(cx, cy, 11, 0, TAU); ctx.fill();
+    ctx.fillStyle = 'rgba(255,96,72,1)';
+    ctx.beginPath(); ctx.arc(cx, cy, 2.3, 0, TAU); ctx.fill();
+    ctx.fillStyle = 'rgba(255,210,195,.85)';
+    ctx.beginPath(); ctx.arc(cx - 0.5, cy - 0.5, 0.9, 0, TAU); ctx.fill();
     ctx.restore();
   } else {
     ctx.save();
@@ -3757,61 +3755,7 @@ function drawReticle() {
 }
 
 function drawScopeOverlay() {
-  var a = G.adsT;
-  if (a < 0.05) return;
-  var aw = clamp((a - 0.15) / 0.34, 0, 1);
-  if (aw <= 0.01) return;
-  var cx = W / 2, cy = H / 2;
-  var winW = Math.min(W * 0.44, 760);
-  var winH = Math.min(winW * 0.76, H * 0.58);
-  var x0 = cx - winW / 2, y0 = cy - winH / 2;
-  var radius = 24;
-
-  ctx.save();
-  ctx.globalAlpha = aw;
-
-  /* soft falloff at the edges of the sight picture (no housing) */
-  var vg = ctx.createRadialGradient(cx, cy, Math.min(winW, winH) * 0.50,
-    cx, cy, Math.max(W, H) * 0.78);
-  vg.addColorStop(0, 'rgba(0,0,0,0)');
-  vg.addColorStop(0.72, 'rgba(0,0,0,.10)');
-  vg.addColorStop(1, 'rgba(0,0,0,.34)');
-  ctx.fillStyle = vg;
-  ctx.fillRect(0, 0, W, H);
-
-  /* glass pane — no frame, just a faint tint and edge */
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(x0, y0, winW, winH, radius);
-  else ctx.rect(x0, y0, winW, winH);
-  ctx.fillStyle = 'rgba(150,210,220,.045)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(205,235,240,.12)';
-  ctx.lineWidth = 1.1;
-  ctx.stroke();
-
-  /* reflection sweep inside the glass */
-  ctx.save();
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(x0, y0, winW, winH, radius);
-  else ctx.rect(x0, y0, winW, winH);
-  ctx.clip();
-  var ref = ctx.createLinearGradient(x0, y0, x0 + winW, y0 + winH);
-  ref.addColorStop(0, 'rgba(255,255,255,.055)');
-  ref.addColorStop(0.34, 'rgba(255,255,255,.012)');
-  ref.addColorStop(0.62, 'rgba(255,255,255,0)');
-  ref.addColorStop(1, 'rgba(180,225,240,.022)');
-  ctx.fillStyle = ref;
-  ctx.fillRect(x0, y0, winW, winH);
-  /* tiny dust / coating specks */
-  ctx.fillStyle = 'rgba(220,245,250,.05)';
-  for (var i = 0; i < 7; i++) {
-    var sx = x0 + ((i * 137) % 100) / 100 * winW;
-    var sy = y0 + ((i * 271 + 43) % 100) / 100 * winH;
-    ctx.beginPath(); ctx.arc(sx, sy, 0.9 + (i % 2), 0, TAU); ctx.fill();
-  }
-  ctx.restore();
-
-  ctx.restore();
+  /* 瞄具只保留枪上的 3D 镜片与中心准心，不再叠加 2D 玻璃遮罩。 */
 }
 
 function drawMuzzleFlash(b, focal) {
