@@ -140,6 +140,8 @@
   }
   .slot .ico{width:26px;height:11px;border:1px solid rgba(255,255,255,.22);border-radius:4px;
     background:rgba(255,255,255,.05)}
+  .slot b{font-weight:600;color:#e2e9ef;font-size:11px}
+  .slot em{font-style:normal;color:rgba(200,208,215,.55);font-size:10px;letter-spacing:.04em}
 
   /* ---- top-center session timer ---- */
   .session{
@@ -393,8 +395,8 @@
       <span class="wname">M250 · 轻机枪</span>
     </div>
     <div class="slots">
-      <span class="slot"><span class="ico"></span>2</span>
-      <span class="slot"><span class="ico"></span>3</span>
+      <span class="slot"><span class="ico"></span><b id="fragCount">2</b><em>G 破片</em></span>
+      <span class="slot"><span class="ico"></span><b id="smokeCount">2</b><em>F 烟雾</em></span>
     </div>
   </div>
   <div class="movestate" id="moveState"></div>
@@ -712,6 +714,45 @@ var SND = {
     s.connect(bp); bp.connect(g); g.connect(this.master);
     s.start(t);
   },
+  explosion: function () {
+    if (!this.ctx) return;
+    var ac = this.ctx, t = ac.currentTime;
+    var len = Math.floor(ac.sampleRate * 0.7);
+    var b = ac.createBuffer(1, len, ac.sampleRate);
+    var d = b.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.0);
+    var s = ac.createBufferSource(); s.buffer = b;
+    var lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(1400, t);
+    lp.frequency.exponentialRampToValueAtTime(160, t + 0.6);
+    var g = ac.createGain(); g.gain.setValueAtTime(0.42, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+    s.connect(lp); lp.connect(g); g.connect(this.master);
+    s.start(t);
+    var o = ac.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(90, t);
+    o.frequency.exponentialRampToValueAtTime(32, t + 0.5);
+    var og = ac.createGain(); og.gain.setValueAtTime(0.34, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    o.connect(og); og.connect(this.master);
+    o.start(t); o.stop(t + 0.62);
+  },
+  smoke: function () {
+    if (!this.ctx) return;
+    var ac = this.ctx, t = ac.currentTime;
+    var len = Math.floor(ac.sampleRate * 1.1);
+    var b = ac.createBuffer(1, len, ac.sampleRate);
+    var d = b.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 0.7);
+    var s = ac.createBufferSource(); s.buffer = b;
+    var bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.5;
+    bp.frequency.setValueAtTime(1600, t);
+    bp.frequency.exponentialRampToValueAtTime(500, t + 1.0);
+    var g = ac.createGain(); g.gain.setValueAtTime(0.20, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 1.1);
+    s.connect(bp); bp.connect(g); g.connect(this.master);
+    s.start(t);
+  },
   enemyShot: function () {
     if (!this.ctx) return;
     var ac = this.ctx, t = ac.currentTime;
@@ -871,7 +912,8 @@ var G = {
   /* combat mode */
   health: 100, maxHealth: 100, lastDamageT: -99, damageFlash: 0, dead: false,
   combat: null, enemyShots: [], killFeed: [], bannerT: 0, bannerText: '',
-  pickups: [], hitDir: 0, hitDirT: 0, victory: false
+  pickups: [], hitDir: 0, hitDirT: 0, victory: false,
+  grenades: { frag: 2, smoke: 2 }, projectiles: [], smokes: []
 };
 
 /* ================================================================
@@ -1241,6 +1283,8 @@ function startRun() {
   G.health = G.maxHealth; G.dead = false; G.lastDamageT = -99; G.damageFlash = 0;
   G.enemyShots.length = 0; G.killFeed.length = 0; G.bannerT = 0; G.bannerText = '';
   G.pickups.length = 0; G.hitDir = 0; G.hitDirT = 0; G.victory = false;
+  G.grenades.frag = 2; G.grenades.smoke = 2;
+  G.projectiles.length = 0; G.smokes.length = 0;
   G.state = 'playing';
   if (G.mode === 'combat') {
     G.combat = { wave: 0, kills: 0, waveKills: 0, spawnLeft: 0, spawnT: 0, breakT: 0, waveEnded: false };
@@ -1354,7 +1398,8 @@ function toMenu() {
   camPos[0] = 0; camPos[1] = MOVE.eyeStand; camPos[2] = 0;
   G.combat = null; G.health = G.maxHealth; G.dead = false;
   G.enemyShots.length = 0; G.killFeed.length = 0; G.pickups.length = 0;
-  G.hitDirT = 0; G.victory = false;
+  G.hitDirT = 0; G.victory = false; G.projectiles.length = 0; G.smokes.length = 0;
+  G.grenades.frag = 2; G.grenades.smoke = 2;
 }
 
 /* ================================================================
@@ -1425,10 +1470,11 @@ function fire() {
     var tg = G.targets[i];
     if (tg.dead) continue;
     var dist = -tg.z;
-    var s = focal / Math.max(2, dist);
-    var headP = projectPoint([tg.x, 1.60, tg.z], b, focal);
-    var torsoP = projectPoint([tg.x, 1.12, tg.z], b, focal);
-    var legsP = projectPoint([tg.x, 0.55, tg.z], b, focal);
+    var hsc = tg.heavy ? 1.22 : 1;
+    var s = focal / Math.max(2, dist) * hsc;
+    var headP = projectPoint([tg.x, 1.60 * hsc, tg.z], b, focal);
+    var torsoP = projectPoint([tg.x, 1.12 * hsc, tg.z], b, focal);
+    var legsP = projectPoint([tg.x, 0.55 * hsc, tg.z], b, focal);
     if (!headP || !torsoP || !legsP) continue;
 
     /* head */
@@ -1813,7 +1859,8 @@ function nextWave() {
 function spawnEnemy() {
   var c = G.combat;
   var lane = Math.random() < 0.5 ? -2.25 : 2.25;
-  var hp = 90 + c.wave * 16;
+  var heavy = c.wave >= 3 && Math.random() < 0.22;
+  var hp = (90 + c.wave * 16) * (heavy ? 2.2 : 1);
   var stop = -rand(9, 17);
   var e = {
     x: lane + rand(-0.55, 0.55), z: -rand(22, 30), lane: lane,
@@ -1821,7 +1868,7 @@ function spawnEnemy() {
     dir: 1, speed: rand(1.8, 2.8) + c.wave * 0.08,
     yaw: 0, born: nowS(), fall: 0, dead: false, deadT: 0, fade: 1,
     firstHitT: -1, bob: rand(0, TAU), id: Math.random(),
-    hostile: true, stopZ: stop, fireT: rand(0.9, 1.8),
+    hostile: true, heavy: heavy, stopZ: stop, fireT: rand(0.9, 1.8),
     flash: 0, hurt: 0
   };
   G.targets.push(e);
@@ -1836,8 +1883,9 @@ function enemyShoot(e) {
   var dist = Math.hypot(e.x - G.px, e.z - G.pz);
   var moving = Math.hypot(G.vx, G.vz) > 1.5;
   var chance = clamp(0.40 - dist * 0.008 - (moving ? 0.12 : 0) - (G.sliding ? 0.08 : 0), 0.07, 0.40);
+  if (inSmoke()) chance *= 0.35;
   if (Math.random() < chance) {
-    damagePlayer(rand(4, 8) * (1 + c.wave * 0.05), e);
+    damagePlayer(rand(4, 8) * (1 + c.wave * 0.05) * (e.heavy ? 1.35 : 1), e);
   }
 }
 
@@ -1935,6 +1983,151 @@ function updateCombat(dt) {
   }
 }
 
+
+/* ---------------- throwables ---------------- */
+function throwGrenade(kind) {
+  if (G.state !== 'playing') return;
+  if (!G.grenades || G.grenades[kind] <= 0) return;
+  G.grenades[kind]--;
+  var b = basis();
+  var fwd = b.f, up = b.u, right = b.r;
+  var sx = camPos[0] + fwd[0] * 0.55 + right[0] * 0.18;
+  var sy = camPos[1] + fwd[1] * 0.55 + up[1] * 0.10;
+  var sz = camPos[2] + fwd[2] * 0.55 + right[2] * 0.18;
+  var sp = 15;
+  G.projectiles.push({
+    kind: kind, x: sx, y: sy, z: sz,
+    vx: fwd[0] * sp + G.vx * 0.4,
+    vy: fwd[1] * sp + 4.2,
+    vz: fwd[2] * sp + G.vz * 0.4,
+    fuse: kind === 'frag' ? 1.45 : 1.2,
+    spin: 0
+  });
+  SND.click(kind === 'frag' ? 520 : 360, 0.10, 0.06);
+}
+
+function updateThrowables(dt) {
+  if (!G.projectiles.length && !G.smokes.length) return;
+  var i;
+  for (i = G.projectiles.length - 1; i >= 0; i--) {
+    var p = G.projectiles[i];
+    p.vy -= 19 * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+    p.spin += dt * 9;
+    if (p.y < 0.16) {
+      p.y = 0.16;
+      p.vy = Math.abs(p.vy) * 0.32;
+      p.vx *= 0.72; p.vz *= 0.72;
+      if (p.vy < 0.8) p.vy = 0;
+    }
+    p.fuse -= dt;
+    if (p.fuse <= 0) {
+      if (p.kind === 'frag') explodeFrag(p.x, p.z);
+      else makeSmoke(p.x, p.z);
+      G.projectiles.splice(i, 1);
+    }
+  }
+  for (i = G.smokes.length - 1; i >= 0; i--) {
+    G.smokes[i].life -= dt;
+    if (G.smokes[i].life <= 0) G.smokes.splice(i, 1);
+  }
+}
+
+function explodeFrag(x, z) {
+  SND.explosion();
+  G.shake = Math.min(1, G.shake + 0.85);
+  var p = projectPoint([x, 0.6, z], basis(), focalLen(basis()));
+  if (p) {
+    for (var k = 0; k < 12; k++) {
+      G.particles.push({
+        kind: 'smoke', x: p.x + rand(-30, 30), y: p.y + rand(-26, 20),
+        life: rand(0.5, 1.0), max: 1.0, vx: rand(-70, 70), vy: rand(-90, -20),
+        r: rand(14, 30), seed: Math.random()
+      });
+    }
+  }
+  for (var i = 0; i < G.targets.length; i++) {
+    var tg = G.targets[i];
+    if (!tg.hostile || tg.dead) continue;
+    var d = Math.hypot(tg.x - x, tg.z - z);
+    if (d > 4.8) continue;
+    var dmg = 78 * (1 - d / 6.2);
+    tg.hp -= dmg;
+    tg.hurt = 1;
+    G.hpDamage += dmg;
+    G.apDamage += 20;
+    if (tg.hp <= 0) {
+      tg.dead = true; tg.deadT = 0; tg.fall = 0;
+      if (G.combat) {
+        G.combat.kills++;
+        G.combat.waveKills++;
+        addKillFeed('破片击倒  +1');
+        if (G.jetCD > 0) G.jetCD *= 0.5;
+        if (Math.random() < 0.38) G.pickups.push({ x: tg.x, z: tg.z, y: 0.55, life: 22, bob: rand(0, TAU) });
+      }
+    }
+  }
+}
+
+function makeSmoke(x, z) {
+  var puffs = [];
+  for (var i = 0; i < 16; i++) {
+    var a = Math.random() * TAU, r = Math.pow(Math.random(), 0.55) * 2.6;
+    puffs.push({
+      ox: Math.cos(a) * r, oz: Math.sin(a) * r,
+      oy: 0.3 + Math.random() * 1.7,
+      s: 1.4 + Math.random() * 1.4
+    });
+  }
+  G.smokes.push({ x: x, z: z, life: 9.5, max: 9.5, puffs: puffs });
+  SND.smoke();
+}
+
+function inSmoke() {
+  for (var i = 0; i < G.smokes.length; i++) {
+    var s = G.smokes[i];
+    if (Math.hypot(s.x - G.px, s.z - G.pz) < 3.0) return true;
+  }
+  return false;
+}
+
+function drawThrowables(b, focal) {
+  var i;
+  for (i = 0; i < G.smokes.length; i++) {
+    var s = G.smokes[i];
+    var k = clamp(s.life / 1.2, 0, 1) * clamp((s.max - s.life) / 0.5, 0, 1);
+    var grow = clamp((s.max - s.life) / 1.6, 0, 1);
+    for (var j = 0; j < s.puffs.length; j++) {
+      var pf = s.puffs[j];
+      var pr = projectPoint([s.x + pf.ox * grow, pf.oy, s.z + pf.oz * grow], b, focal);
+      if (!pr) continue;
+      var sc = focal / Math.max(1, -pr.z);
+      var rad = pf.s * sc * 0.55;
+      if (rad < 2) continue;
+      var g = ctx.createRadialGradient(pr.x, pr.y, 0, pr.x, pr.y, rad);
+      g.addColorStop(0, 'rgba(190,195,198,' + (0.22 * k).toFixed(3) + ')');
+      g.addColorStop(0.6, 'rgba(150,156,160,' + (0.13 * k).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(120,126,130,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(pr.x, pr.y, rad, 0, TAU); ctx.fill();
+    }
+  }
+  for (i = 0; i < G.projectiles.length; i++) {
+    var p = G.projectiles[i];
+    var pp = projectPoint([p.x, p.y, p.z], b, focal);
+    if (!pp) continue;
+    var sc2 = focal / Math.max(1, -pp.z);
+    var r = Math.max(2, 0.055 * sc2);
+    ctx.save();
+    ctx.fillStyle = p.kind === 'frag' ? '#3c4a35' : '#5b6368';
+    ctx.beginPath(); ctx.arc(pp.x, pp.y, r, 0, TAU); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.18)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 function update(dt, now) {
   G.swayT += dt;
 
@@ -2015,6 +2208,7 @@ function update(dt, now) {
     }
   }
   if (G.combat) updateCombat(dt);
+  updateThrowables(dt);
   for (var r = G.respawns.length - 1; r >= 0; r--) {
     G.respawns[r] -= dt;
   }
@@ -2111,6 +2305,7 @@ function render(now) {
   drawTracerAndLaser(b, focal);
   drawEnemyShots(b, focal);
   drawPickups(b, focal);
+  drawThrowables(b, focal);
   drawParticles();
   drawNumbers();
   ctx.restore();
@@ -2543,8 +2738,9 @@ function drawTarget(t, b, focal, now) {
   var base = projectPoint([t.x, 0, t.z], b, focal);
   if (!base) return;
   var dist = -t.z;
+  var hsc = t.heavy ? 1.22 : 1;
   var s = focal / Math.max(2, dist);       // px per meter
-  var h = 1.86 * s;
+  var h = 1.86 * s * hsc;
   if (h < 5) return;
 
   var fog = Math.exp(-Math.max(0, dist - 3) * 0.020);
@@ -2583,7 +2779,7 @@ function drawTarget(t, b, focal, now) {
   }
   var dark = 'rgba(' + (26 * lit + 8 | 0) + ',' + (28 * lit + 8 | 0) + ',' + (26 * lit + 8 | 0) + ',1)';
 
-  var wUnit = s;
+  var wUnit = s * hsc;
   /* contact shadow */
   ctx.fillStyle = 'rgba(0,0,0,.38)';
   ctx.beginPath();
@@ -3742,6 +3938,8 @@ function updateHud(force) {
   if (ammoEl) ammoEl.classList.toggle('low', G.ammo <= 10);
 
   setText('hpVal', String(Math.ceil(G.health)));
+  setText('fragCount', String(G.grenades ? G.grenades.frag : 0));
+  setText('smokeCount', String(G.grenades ? G.grenades.smoke : 0));
   var hpb = $('hpBar');
   if (hpb) {
     hpb.style.width = (clamp(G.health / G.maxHealth, 0, 1) * 100).toFixed(1) + '%';
@@ -3897,6 +4095,10 @@ window.addEventListener('keydown', function (e) {
     if (G.state === 'playing') { e.preventDefault(); jump(); }
   } else if (e.code === 'KeyQ') {
     startJet();
+  } else if (e.code === 'KeyG') {
+    throwGrenade('frag');
+  } else if (e.code === 'KeyF') {
+    throwGrenade('smoke');
   } else if (e.code === 'Digit1' || e.code === 'Numpad1') {
     switchWeapon('gun');
   } else if (e.code === 'Digit3' || e.code === 'Numpad3') {
