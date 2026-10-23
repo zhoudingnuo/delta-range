@@ -909,7 +909,7 @@ var G = {
   eyeH: 1.62, bobT: 0, bobX: 0, bobY: 0, rollVis: 0,
   sprinting: false, crouchHeld: false,
   sliding: false, slideT: 0, slideCD: 0, slideSpeed: 0, slideDirX: 0, slideDirZ: 1,
-  jetActive: 0, jetRecover: 0, jetCD: 0, jetBoost: 0, jetDirX: 0, jetDirZ: -1,
+  jetActive: 0, jetRecover: 0, jetCD: 0, jetBoost: 0, jetDirX: 0, jetDirZ: -1, jetCancel: false,
   weapon: 'gun', swapT: 0, knifeSwing: 0, knifeCD: 0,
   keys: {}, moveFov: 0, speedFx: 0, jetBlockFlash: 0,
 
@@ -1687,7 +1687,10 @@ function updateMovement(dt) {
     G.vz = G.jetDirZ * MOVE.jet;
     if (G.jetActive <= 0) {
       G.jetActive = 0;
-      if (G.weapon === 'gun') G.jetRecover = (G.mode === 'moving' ? 0 : MOVE.jetRecover);
+      if (G.weapon === 'gun' && !G.jetCancel) {
+        G.jetRecover = (G.mode === 'moving' ? 0 : MOVE.jetRecover);
+      }
+      G.jetCancel = false;
     }
     G.speedFx = Math.min(1, G.speedFx + dt * 8);
   } else {
@@ -1784,6 +1787,7 @@ function startJet() {
   }
   G.jetDirX = wx; G.jetDirZ = wz;
   G.jetActive = MOVE.jetTime;
+  G.jetCancel = false;
   G.jetCD = (G.mode === 'moving' ? 0 : MOVE.jetCD);
   G.jetBoost = MOVE.jetBoostTime;
   G.jetRecover = 0;
@@ -1801,11 +1805,11 @@ function switchWeapon(w) {
   var same = G.weapon === w;
   if (same && !(w === 'gun' && (G.jetActive > 0 || G.jetRecover > 0))) return;
   if (w === 'gun') {
-    if (G.jetActive > 0 || G.jetRecover > 0) {
-      G.jetActive = 0;
-      G.jetRecover = 0;
-      G.jetBlockFlash = 0;
-    }
+    /* 只取消开火后摇：清掉后摇、允许立刻开火；喷气本身不被打断 */
+    if (G.jetRecover > 0) G.jetRecover = 0;
+    if (G.jetActive > 0) G.jetCancel = true;
+    G.jetBlockFlash = 0;
+    G.nextShot = 0;
   } else if (w === 'knife') {
     if (G.jetRecover > 0) G.jetRecover = Math.min(G.jetRecover, 0.10);
   }
