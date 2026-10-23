@@ -463,6 +463,8 @@
         <output id="adsOut">0.60</output></label>
       <label>靶子血量 <input id="targetHp" type="range" min="50" max="500" step="25" value="100" />
         <output id="targetHpOut">100</output></label>
+      <label>后坐力倍率 <input id="recoilMul" type="range" min="0.5" max="4" step="0.1" value="2" />
+        <output id="recoilMulOut">2.0×</output></label>
       <div class="keys">
         <span><kbd>WASD</kbd>移动</span>
         <span><kbd>Shift</kbd>冲刺</span>
@@ -894,7 +896,7 @@ var G = {
   swayT: 0, swayX: 0, swayY: 0,
   flash: 0, kick: 0, shake: 0,
   hitMarker: 0, hitHead: false,
-  targets: [], respawns: [], targetHp: 100, spawnTimer: 0,
+  targets: [], respawns: [], targetHp: 100, spawnTimer: 0, recoilMul: 2.0,
   particles: [], numbers: [],
   muzzle: [0, 0],
   fps: 144, temp: 59,
@@ -1520,10 +1522,10 @@ function fire() {
   var kickMul = lerp(1, GUN.adsKick, G.adsT) * (G.fireMode === 'auto' ? 1 : 0.82);
   var yawKick = (GUN.recoilYaw * (0.35 + Math.min(G.ammo ? 1 : 0, 1) * 0.65) +
     Math.sin(G.shots * 0.55) * 0.0011 + (Math.random() - 0.5) * 0.0016) * kickMul;
-  G.rp += GUN.recoilPitch * kickMul * ramp * rand(0.92, 1.08);
-  G.ry += yawKick;
-  G.rp = Math.min(G.rp, 0.32);
-  G.ry = clamp(G.ry, -0.10, 0.10);
+  G.rp += GUN.recoilPitch * G.recoilMul * kickMul * ramp * rand(0.92, 1.08);
+  G.ry += yawKick * G.recoilMul;
+  G.rp = Math.min(G.rp, Math.min(0.90, 0.30 * G.recoilMul));
+  G.ry = clamp(G.ry, -0.10 * G.recoilMul, 0.10 * G.recoilMul);
 
   G.flash = 1;
   G.kick = 1;
@@ -4121,6 +4123,10 @@ $('sens').addEventListener('input', function () {
 $('adsSens').addEventListener('input', function () {
   G.adsSensScale = parseFloat(this.value) || 0.6;
   $('adsOut').textContent = G.adsSensScale.toFixed(2);
+});
+$('recoilMul').addEventListener('input', function () {
+  G.recoilMul = parseFloat(this.value) || 1;
+  $('recoilMulOut').textContent = G.recoilMul.toFixed(1) + '×';
 });
 $('targetHp').addEventListener('input', function () {
   G.targetHp = parseFloat(this.value) || 100;
