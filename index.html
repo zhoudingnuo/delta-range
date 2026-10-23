@@ -2332,7 +2332,7 @@ function render(now) {
   }
   for (i = 0; i < G.targets.length; i++) {
     var tg = G.targets[i];
-    draws.push({ z: -tg.z, t: tg });
+    draws.push({ z: Math.hypot(tg.x - camPos[0], tg.z - camPos[2]), t: tg });
   }
   draws.sort(function (a, c) { return c.z - a.z; });
 
