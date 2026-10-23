@@ -427,8 +427,8 @@
 
     <div class="modes" id="modes">
       <button class="mode-card active" data-mode="static"><b>静止靶场</b><span>60 秒 · 4 靶 · 精准点射</span></button>
-      <button class="mode-card" data-mode="moving"><b>移动靶</b><span>60 秒 · 3 靶 · 轨道横移</span></button>
-      <button class="mode-card" data-mode="blitz"><b>极限速射</b><span>45 秒 · 5 靶 · 近距压枪</span></button>
+      <button class="mode-card" data-mode="moving"><b>移动靶</b><span>60 秒 · 4 靶 · 无冷却机动</span></button>
+      <button class="mode-card" data-mode="blitz"><b>极限速射</b><span>45 秒 · 4 靶 · 近距压枪</span></button>
       <button class="mode-card" data-mode="combat"><b>实战演练</b><span>波次 · 敌人会还击</span></button>
     </div>
 
@@ -461,6 +461,8 @@
         <output id="volOut">0.80</output></label>
       <label>开镜灵敏度 <input id="adsSens" type="range" min="0.2" max="1.2" step="0.05" value="0.6" />
         <output id="adsOut">0.60</output></label>
+      <label>靶子血量 <input id="targetHp" type="range" min="50" max="500" step="25" value="100" />
+        <output id="targetHpOut">100</output></label>
       <div class="keys">
         <span><kbd>WASD</kbd>移动</span>
         <span><kbd>Shift</kbd>冲刺</span>
@@ -868,8 +870,8 @@ var MOVE = {
 };
 var MODES = {
   static: { name: '静止靶场', time: 60, count: 4, dist: [9, 26], move: 0, speed: 0 },
-  moving: { name: '移动靶',   time: 60, count: 3, dist: [10, 26], move: 1, speed: [0.7, 1.5] },
-  blitz:  { name: '极限速射', time: 45, count: 5, dist: [7, 18], move: 1, speed: [1.4, 2.6] },
+  moving: { name: '移动靶',   time: 60, count: 4, dist: [10, 26], move: 1, speed: [0.7, 1.5] },
+  blitz:  { name: '极限速射', time: 45, count: 4, dist: [7, 18], move: 1, speed: [1.4, 2.6] },
   combat: { name: '实战演练', time: 600, count: 0, dist: [12, 32], move: 0, speed: [0, 0], combat: 1 }
 };
 
@@ -892,7 +894,7 @@ var G = {
   swayT: 0, swayX: 0, swayY: 0,
   flash: 0, kick: 0, shake: 0,
   hitMarker: 0, hitHead: false,
-  targets: [], respawns: [],
+  targets: [], respawns: [], targetHp: 100, spawnTimer: 0,
   particles: [], numbers: [],
   muzzle: [0, 0],
   fps: 144, temp: 59,
@@ -947,7 +949,7 @@ function camAngles() {
 }
 function basis() {
   var a = camAngles();
-  var p = clamp(a.pitch, -1.35, 1.35), y = a.yaw;
+  var p = clamp(a.pitch, -1.5, 1.5), y = a.yaw;
   var cp = Math.cos(p), sp = Math.sin(p), cy = Math.cos(y), sy = Math.sin(y);
   var rc = Math.cos(G.rollVis || 0), rs = Math.sin(G.rollVis || 0);
   var r0 = [cy, 0, sy];
@@ -1193,6 +1195,7 @@ function buildProps() {
   addBox(0, 0.24, -0.948, 12.6, 0.018, 0.022, rgb.black);
   /* far exit sign */
   addSign(0, 2.75, -49.5, 1.35, 0.52, rgb.crateDark, { exit: true });
+  addSign(0, 2.55, 1.94, 1.05, 0.42, rgb.crateDark, { exit: true });
   /* extra crates on the right */
   addBox(7.55, 0, -11.0, 1.0, 0.72, 0.9, rgb.crateDark);
   addBox(7.55, 0.72, -11.0, 0.82, 0.34, 0.74, rgb.crate);
@@ -1214,7 +1217,7 @@ function spawnTarget(initial) {
   var cfg = MODES[G.mode];
   var t = {
     x: 0, z: 0, y: 0,
-    hp: 100, armor: 100,
+    hp: G.targetHp || 100, maxHp: G.targetHp || 100, armor: 100,
     dir: Math.random() < 0.5 ? -1 : 1,
     speed: cfg.move ? rand(cfg.speed[0], cfg.speed[1]) : 0,
     yaw: rand(-0.18, 0.18),
@@ -1280,6 +1283,7 @@ function startRun() {
   G.weapon = 'gun'; G.swapT = 0; G.knifeSwing = 0; G.keys = {};
   G.crouchHeld = false; G.moveFov = 0; G.jetBlockFlash = 0;
   camPos[0] = 0; camPos[1] = MOVE.eyeStand; camPos[2] = 0;
+  G.spawnTimer = 0;
   G.health = G.maxHealth; G.dead = false; G.lastDamageT = -99; G.damageFlash = 0;
   G.enemyShots.length = 0; G.killFeed.length = 0; G.bannerT = 0; G.bannerText = '';
   G.pickups.length = 0; G.hitDir = 0; G.hitDirT = 0; G.victory = false;
@@ -1679,7 +1683,7 @@ function updateMovement(dt) {
     G.vz = G.jetDirZ * MOVE.jet;
     if (G.jetActive <= 0) {
       G.jetActive = 0;
-      if (G.weapon === 'gun') G.jetRecover = MOVE.jetRecover;
+      if (G.weapon === 'gun') G.jetRecover = (G.mode === 'moving' ? 0 : MOVE.jetRecover);
     }
     G.speedFx = Math.min(1, G.speedFx + dt * 8);
   } else {
@@ -1691,7 +1695,7 @@ function updateMovement(dt) {
       G.slideSpeed = Math.max(3.6, G.slideSpeed - dt * 8.2);
       G.vx = G.slideDirX * G.slideSpeed;
       G.vz = G.slideDirZ * G.slideSpeed;
-      if (G.slideT <= 0) { G.sliding = false; G.slideCD = MOVE.slideCD; }
+      if (G.slideT <= 0) { G.sliding = false; G.slideCD = (G.mode === 'moving' ? 0 : MOVE.slideCD); }
     } else {
       var base = wantSprint ? MOVE.sprint : MOVE.walk;
       if (G.jetBoost > 0) base *= MOVE.jetBoostMul;
@@ -1709,7 +1713,7 @@ function updateMovement(dt) {
     G.py += G.vy * dt;
     if (G.py <= 0) {
       G.py = 0; G.vy = 0; G.grounded = true;
-      if (G.sliding) { G.sliding = false; G.slideCD = MOVE.slideCD; }
+      if (G.sliding) { G.sliding = false; G.slideCD = (G.mode === 'moving' ? 0 : MOVE.slideCD); }
     }
   }
 
@@ -1776,7 +1780,7 @@ function startJet() {
   }
   G.jetDirX = wx; G.jetDirZ = wz;
   G.jetActive = MOVE.jetTime;
-  G.jetCD = MOVE.jetCD;
+  G.jetCD = (G.mode === 'moving' ? 0 : MOVE.jetCD);
   G.jetBoost = MOVE.jetBoostTime;
   G.jetRecover = 0;
   G.sliding = false;
@@ -2219,17 +2223,22 @@ function update(dt, now) {
   }
   if (G.combat) updateCombat(dt);
   updateThrowables(dt);
-  for (var r = G.respawns.length - 1; r >= 0; r--) {
-    G.respawns[r] -= dt;
+
+  /* keep the range populated (fast respawn) */
+  if (G.mode !== 'combat') {
+    var aliveN = 0;
+    for (var ai = 0; ai < G.targets.length; ai++) if (!G.targets[ai].dead) aliveN++;
+    var needN = MODES[G.mode].count;
+    if (aliveN < needN) {
+      G.spawnTimer = (G.spawnTimer || 0) - dt;
+      if (G.spawnTimer <= 0) { spawnTarget(false); G.spawnTimer = 0.05; }
+    } else {
+      G.spawnTimer = 0;
+    }
   }
-  /* replace dead targets after delay */
-  var deadCount = 0;
   for (var k2 = G.targets.length - 1; k2 >= 0; k2--) {
     var tg = G.targets[k2];
-    if (tg.dead && tg.deadT > 1.45) {
-      G.targets.splice(k2, 1);
-      if (G.mode !== 'combat') spawnTarget(false);
-    }
+    if (tg.dead && tg.deadT > 1.45) G.targets.splice(k2, 1);
   }
 
   updateParticles(dt);
@@ -2420,6 +2429,18 @@ function drawWalls(b, focal) {
   /* back wall */
   fillQuadWorld([[-9, 0, WORLD.z1], [9, 0, WORLD.z1], [9, WORLD.y1, WORLD.z1], [-9, WORLD.y1, WORLD.z1]],
     [13, 17, 20], 1, b, focal, 0.15);
+  /* wall behind the player, so the camera can turn freely */
+  fillQuadWorld([[-9, 0, WORLD.z0], [9, 0, WORLD.z0], [9, WORLD.y1, WORLD.z0], [-9, WORLD.y1, WORLD.z0]],
+    [30, 36, 40], 0.95, b, focal, 0);
+  /* rear door + panel seams */
+  fillQuadWorld([[-1.15, 0, WORLD.z0 - 0.02], [1.15, 0, WORLD.z0 - 0.02],
+                 [1.15, 2.35, WORLD.z0 - 0.02], [-1.15, 2.35, WORLD.z0 - 0.02]],
+    [16, 20, 23], 1, b, focal, 0);
+  for (var sx2 = -6; sx2 <= 6; sx2 += 3) {
+    if (Math.abs(sx2) < 1.4) continue;
+    strokeLineWorld([sx2, 0, WORLD.z0 - 0.01], [sx2, 4.2, WORLD.z0 - 0.01],
+      'rgba(0,0,0,.28)', 1.2, b, focal);
+  }
 
   /* wall panel seams */
   for (var z = -4; z > -46; z -= 4) {
@@ -2427,6 +2448,9 @@ function drawWalls(b, focal) {
     strokeLineWorld([8.97, 0, z], [8.97, 2.55, z], 'rgba(0,0,0,.18)', 1.2, b, focal);
   }
   strokeLineWorld([-8.97, 2.55, WORLD.z0], [-8.97, 2.55, WORLD.z1], 'rgba(0,0,0,.4)', 2, b, focal);
+  strokeLineWorld([-1.15, 0, WORLD.z0 - 0.03], [-1.15, 2.35, WORLD.z0 - 0.03], 'rgba(120,130,138,.20)', 2, b, focal);
+  strokeLineWorld([1.15, 0, WORLD.z0 - 0.03], [1.15, 2.35, WORLD.z0 - 0.03], 'rgba(120,130,138,.20)', 2, b, focal);
+  strokeLineWorld([-1.15, 2.35, WORLD.z0 - 0.03], [1.15, 2.35, WORLD.z0 - 0.03], 'rgba(120,130,138,.20)', 2, b, focal);
   strokeLineWorld([8.97, 2.55, WORLD.z0], [8.97, 2.55, WORLD.z1], 'rgba(0,0,0,.4)', 2, b, focal);
 }
 
@@ -2513,7 +2537,8 @@ function drawSignProp(p, b, focal) {
 
   var pc = projectPoint(center, b, focal);
   if (!pc) return;
-  var s = focal / Math.max(1, -center[2]);
+  var sdx = center[0] - camPos[0], sdy = center[1] - camPos[1], sdz = center[2] - camPos[2];
+  var s = focal / Math.max(1, Math.hypot(sdx, sdy, sdz));
   var screenH = h * s;
   ctx.save();
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -4011,8 +4036,8 @@ document.addEventListener('pointerlockerror', function () {
 window.addEventListener('mousemove', function (e) {
   if (G.state !== 'playing' || document.pointerLockElement !== canvas) return;
   var sens = 0.0021 * G.sensScale * (1 - (1 - GUN.adsSens * G.adsSensScale) * G.adsT);
-  G.yaw = clamp(G.yaw + e.movementX * sens, -1.25, 1.25);
-  G.pitch = clamp(G.pitch - e.movementY * sens, -0.62, 0.55);
+  G.yaw = G.yaw + e.movementX * sens;
+  G.pitch = clamp(G.pitch - e.movementY * sens, -1.5, 1.5);
 });
 
 window.addEventListener('mousedown', function (e) {
@@ -4101,6 +4126,14 @@ $('sens').addEventListener('input', function () {
 $('adsSens').addEventListener('input', function () {
   G.adsSensScale = parseFloat(this.value) || 0.6;
   $('adsOut').textContent = G.adsSensScale.toFixed(2);
+});
+$('targetHp').addEventListener('input', function () {
+  G.targetHp = parseFloat(this.value) || 100;
+  $('targetHpOut').textContent = String(G.targetHp);
+  for (var i = 0; i < G.targets.length; i++) {
+    var t = G.targets[i];
+    if (!t.hostile) { t.maxHp = G.targetHp; t.hp = G.targetHp; t.armor = 100; }
+  }
 });
 $('vol').addEventListener('input', function () {
   var v = parseFloat(this.value);
