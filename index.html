@@ -1469,26 +1469,36 @@ function fire() {
   for (var i = 0; i < G.targets.length; i++) {
     var tg = G.targets[i];
     if (tg.dead) continue;
-    var dist = -tg.z;
+    var dist = Math.hypot(tg.x - G.px, tg.z - G.pz);
     var hsc = tg.heavy ? 1.22 : 1;
     var s = focal / Math.max(2, dist) * hsc;
-    var headP = projectPoint([tg.x, 1.60 * hsc, tg.z], b, focal);
-    var torsoP = projectPoint([tg.x, 1.12 * hsc, tg.z], b, focal);
-    var legsP = projectPoint([tg.x, 0.55 * hsc, tg.z], b, focal);
-    if (!headP || !torsoP || !legsP) continue;
 
-    /* head */
-    if (Math.hypot(sx - headP.x, sy - headP.y) < 0.155 * s) {
-      if (!best || dist < best.d) best = { t: tg, d: dist, part: 'head', hx: headP.x, hy: headP.y };
-    }
-    /* torso */
-    if (Math.abs(sx - torsoP.x) < 0.285 * s && Math.abs(sy - torsoP.y) < 0.34 * s) {
-      if (!best || dist < best.d) best = { t: tg, d: dist, part: 'torso', hx: sx, hy: sy };
-    }
-    /* pelvis / legs */
-    if (Math.abs(sx - legsP.x) < 0.24 * s && Math.abs(sy - legsP.y) < 0.40 * s) {
-      if (!best || dist < best.d) best = { t: tg, d: dist, part: 'limb', hx: sx, hy: sy };
-    }
+    var tryHit = function (wx, wy, wz, hw, hh, part, round) {
+      var p = projectPoint([wx, wy, wz], b, focal);
+      if (!p) return;
+      if (round) {
+        if (Math.hypot(sx - p.x, sy - p.y) > hw * s) return;
+      } else {
+        if (Math.abs(sx - p.x) > hw * s || Math.abs(sy - p.y) > hh * s) return;
+      }
+      if (!best || dist < best.d) best = { t: tg, d: dist, part: part, hx: p.x, hy: p.y };
+    };
+
+    /* head / helmet */
+    tryHit(tg.x, 1.64 * hsc, tg.z, 0.15, 0.15, 'head', true);
+    /* chest + vest */
+    tryHit(tg.x, 1.22 * hsc, tg.z, 0.25, 0.245, 'torso', false);
+    /* shoulders */
+    tryHit(tg.x, 1.40 * hsc, tg.z, 0.295, 0.085, 'torso', false);
+    /* pelvis */
+    tryHit(tg.x, 0.93 * hsc, tg.z, 0.19, 0.10, 'limb', false);
+    /* legs */
+    tryHit(tg.x, 0.48 * hsc, tg.z, 0.20, 0.39, 'limb', false);
+    /* arms (rotated with the body) */
+    var ay = Math.atan2(G.px - tg.x, G.pz - tg.z);
+    var ax = Math.cos(ay) * 0.315 * hsc, az = -Math.sin(ay) * 0.315 * hsc;
+    tryHit(tg.x + ax, 1.20 * hsc, tg.z + az, 0.095, 0.24, 'limb', false);
+    tryHit(tg.x - ax, 1.20 * hsc, tg.z - az, 0.095, 0.24, 'limb', false);
   }
 
   if (best) {
@@ -2735,204 +2745,196 @@ function drawLights(b, focal) {
 
 /* ---------------- targets ---------------- */
 function drawTarget(t, b, focal, now) {
-  var base = projectPoint([t.x, 0, t.z], b, focal);
-  if (!base) return;
-  var dist = -t.z;
-  var hsc = t.heavy ? 1.22 : 1;
-  var s = focal / Math.max(2, dist);       // px per meter
-  var h = 1.86 * s * hsc;
-  if (h < 5) return;
-
-  var fog = Math.exp(-Math.max(0, dist - 3) * 0.020);
-  var lit = clamp(fog, 0.22, 1);
-  var tilt = t.fall * 1.35;
-
-  /* fade out just before respawn */
+  var dist = Math.max(2, Math.hypot(t.x - G.px, t.z - G.pz));
   var alpha = 1;
   if (t.dead && t.deadT > 1.25) alpha = clamp(1 - (t.deadT - 1.25) / 0.2, 0, 1);
+  if (alpha <= 0.01) return;
+
+  var tscale = t.heavy ? 1.22 : 1;
+  var yaw = Math.atan2(G.px - t.x, G.pz - t.z);
+  var fall = -t.fall * 1.35;
+  var cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
+  var cfall = Math.cos(fall), sfall = Math.sin(fall);
+
+  var hostile = !!t.hostile;
+  var bodyC = hostile ? [128, 86, 76] : [178, 152, 106];
+  var vestC = hostile ? [96, 58, 54] : [130, 122, 98];
+  var darkC = hostile ? [34, 27, 27] : [42, 46, 44];
+  var metalC = [66, 72, 76];
+  var visorC = hostile ? [255, 66, 44] : [36, 40, 42];
+
+  var fogK = Math.exp(-Math.max(0, dist - 3) * 0.020);
+  var amb = 0.30 + 0.70 * clamp(fogK, 0, 1);
+
+  function xf(lx, ly, lz, noFall) {
+    var cf = noFall ? 1 : cfall, sf = noFall ? 0 : sfall;
+    var yy = ly * cf - lz * sf;
+    var zz = ly * sf + lz * cf;
+    var wx = (lx * cyaw + zz * syaw) * tscale;
+    var wz = (-lx * syaw + zz * cyaw) * tscale;
+    return [t.x + wx, yy * tscale, t.z + wz];
+  }
+  function rotN(n, yawA, fallA) {
+    var cf = Math.cos(fallA), sf = Math.sin(fallA);
+    var y1 = n[1] * cf - n[2] * sf;
+    var z1 = n[1] * sf + n[2] * cf;
+    var cy = Math.cos(yawA), sy = Math.sin(yawA);
+    return [n[0] * cy + z1 * sy, y1, -n[0] * sy + z1 * cy];
+  }
+
+  var parts = [];
+  function part(x0, x1, y0, y1, z0, z1, color, opt) {
+    parts.push({ b: [x0, x1, y0, y1, z0, z1], c: color, o: opt || {} });
+  }
+
+  /* base / rail trolley (stays on the ground while the body falls) */
+  part(-0.31, 0.31, 0.00, 0.05, -0.23, 0.23, metalC, { noFall: true });
+  part(-0.24, 0.24, 0.05, 0.10, -0.17, 0.17, [46, 50, 54], { noFall: true });
+
+  /* boots + legs */
+  part(-0.19, -0.03, 0.10, 0.20, -0.13, 0.15, darkC);
+  part(0.03, 0.19, 0.10, 0.20, -0.13, 0.15, darkC);
+  part(-0.185, -0.035, 0.18, 0.60, -0.09, 0.09, bodyC);
+  part(0.035, 0.185, 0.18, 0.60, -0.09, 0.09, bodyC);
+  part(-0.185, -0.035, 0.60, 0.86, -0.085, 0.085, bodyC);
+  part(0.035, 0.185, 0.60, 0.86, -0.085, 0.085, bodyC);
+  part(-0.195, -0.025, 0.44, 0.56, -0.105, 0.105, vestC);
+  part(0.025, 0.195, 0.44, 0.56, -0.105, 0.105, vestC);
+
+  /* pelvis + torso + vest */
+  part(-0.17, 0.17, 0.84, 1.00, -0.12, 0.12, bodyC);
+  part(-0.22, 0.22, 1.00, 1.42, -0.15, 0.15, bodyC);
+  part(-0.20, 0.20, 1.03, 1.40, -0.175, 0.175, vestC);
+  part(-0.145, 0.145, 1.10, 1.33, 0.175, 0.195, darkC);
+
+  /* shoulders + arms */
+  part(-0.29, 0.29, 1.34, 1.45, -0.145, 0.145, vestC);
+  part(-0.36, -0.235, 1.10, 1.38, -0.075, 0.075, bodyC);
+  part(0.235, 0.36, 1.10, 1.38, -0.075, 0.075, bodyC);
+  part(-0.385, -0.255, 0.92, 1.12, -0.065, 0.065, bodyC);
+  part(0.255, 0.385, 0.92, 1.12, -0.065, 0.065, bodyC);
+  part(-0.395, -0.265, 0.84, 0.94, -0.075, 0.075, darkC);
+  part(0.265, 0.395, 0.84, 0.94, -0.075, 0.075, darkC);
+
+  /* neck + head + helmet + visor */
+  part(-0.05, 0.05, 1.42, 1.50, -0.05, 0.05, bodyC);
+  part(-0.092, 0.092, 1.50, 1.68, -0.10, 0.10, bodyC);
+  part(-0.112, 0.112, 1.64, 1.78, -0.12, 0.12, vestC);
+  part(-0.13, 0.13, 1.635, 1.665, 0.09, 0.14, darkC);
+  part(-0.078, 0.078, 1.545, 1.645, 0.098, 0.108, visorC, { glow: hostile });
+
+  /* backpack */
+  part(-0.15, 0.15, 1.06, 1.36, -0.27, -0.16, darkC);
+
+  /* heavy armour */
+  if (t.heavy) {
+    part(-0.345, -0.235, 1.28, 1.47, -0.13, 0.13, vestC);
+    part(0.235, 0.345, 1.28, 1.47, -0.13, 0.13, vestC);
+    part(-0.16, 0.16, 1.045, 1.13, -0.19, 0.19, vestC);
+  }
+
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.translate(base.x, base.y);
-  ctx.rotate(-tilt);
 
-  var tan = function (k) {
-    return 'rgb(' + clamp(190 * lit * k | 0, 0, 255) + ',' +
-                    clamp(168 * lit * k | 0, 0, 255) + ',' +
-                    clamp(116 * lit * k | 0, 0, 255) + ')';
-  };
-  var vest = function (k) {
-    return 'rgb(' + clamp(143 * lit * k | 0, 0, 255) + ',' +
-                    clamp(134 * lit * k | 0, 0, 255) + ',' +
-                    clamp(110 * lit * k | 0, 0, 255) + ')';
-  };
-  if (t.hostile) {
-    tan = function (k) {
-      return 'rgb(' + clamp(126 * lit * k | 0, 0, 255) + ',' +
-                      clamp(86 * lit * k | 0, 0, 255) + ',' +
-                      clamp(78 * lit * k | 0, 0, 255) + ')';
-    };
-    vest = function (k) {
-      return 'rgb(' + clamp(92 * lit * k | 0, 0, 255) + ',' +
-                      clamp(58 * lit * k | 0, 0, 255) + ',' +
-                      clamp(56 * lit * k | 0, 0, 255) + ')';
-    };
-  }
-  var dark = 'rgba(' + (26 * lit + 8 | 0) + ',' + (28 * lit + 8 | 0) + ',' + (26 * lit + 8 | 0) + ',1)';
-
-  var wUnit = s * hsc;
   /* contact shadow */
-  ctx.fillStyle = 'rgba(0,0,0,.38)';
-  ctx.beginPath();
-  ctx.ellipse(0, 0.02 * wUnit, 0.42 * wUnit, 0.10 * wUnit, 0, 0, TAU);
-  ctx.fill();
-  /* base plate / rail trolley */
-  ctx.fillStyle = 'rgba(' + (44 * lit + 6 | 0) + ',' + (48 * lit + 6 | 0) + ',' + (52 * lit + 6 | 0) + ',1)';
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 0.30 * wUnit, 0.075 * wUnit, 0, 0, TAU);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(28,31,34,.95)';
-  ctx.fillRect(-0.22 * wUnit, -0.055 * wUnit, 0.44 * wUnit, 0.055 * wUnit);
+  var shPts = [
+    xf(-0.34, 0.012, -0.25, true), xf(0.34, 0.012, -0.25, true),
+    xf(0.34, 0.012, 0.25, true), xf(-0.34, 0.012, 0.25, true)
+  ];
+  var sh = projectPoly(shPts, b, focal);
+  if (sh) {
+    ctx.fillStyle = 'rgba(0,0,0,.34)';
+    ctx.beginPath();
+    ctx.moveTo(sh.pts[0].x, sh.pts[0].y);
+    for (var si = 1; si < sh.pts.length; si++) ctx.lineTo(sh.pts[si].x, sh.pts[si].y);
+    ctx.closePath();
+    ctx.fill();
+  }
 
-  /* legs */
-  ctx.fillStyle = tan(0.78);
-  ctx.beginPath();
-  ctx.moveTo(-0.15 * wUnit, -0.06 * wUnit);
-  ctx.lineTo(-0.135 * wUnit, -0.88 * wUnit);
-  ctx.lineTo(-0.02 * wUnit, -0.90 * wUnit);
-  ctx.lineTo(-0.035 * wUnit, -0.06 * wUnit);
-  ctx.closePath(); ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(0.035 * wUnit, -0.06 * wUnit);
-  ctx.lineTo(0.02 * wUnit, -0.90 * wUnit);
-  ctx.lineTo(0.135 * wUnit, -0.88 * wUnit);
-  ctx.lineTo(0.15 * wUnit, -0.06 * wUnit);
-  ctx.closePath(); ctx.fill();
-  /* knee pads */
-  ctx.fillStyle = dark;
-  ctx.fillRect(-0.145 * wUnit, -0.47 * wUnit, 0.105 * wUnit, 0.10 * wUnit);
-  ctx.fillRect(0.04 * wUnit, -0.47 * wUnit, 0.105 * wUnit, 0.10 * wUnit);
-
-  /* pelvis */
-  ctx.fillStyle = tan(0.86);
-  ctx.beginPath();
-  ctx.moveTo(-0.20 * wUnit, -0.86 * wUnit);
-  ctx.lineTo(0.20 * wUnit, -0.86 * wUnit);
-  ctx.lineTo(0.17 * wUnit, -1.02 * wUnit);
-  ctx.lineTo(-0.17 * wUnit, -1.02 * wUnit);
-  ctx.closePath(); ctx.fill();
-
-  /* torso vest */
-  var vg = ctx.createLinearGradient(-0.28 * wUnit, 0, 0.28 * wUnit, 0);
-  vg.addColorStop(0, vest(0.72));
-  vg.addColorStop(0.45, vest(1.02));
-  vg.addColorStop(1, vest(0.66));
-  ctx.fillStyle = vg;
-  ctx.beginPath();
-  ctx.moveTo(-0.235 * wUnit, -1.02 * wUnit);
-  ctx.lineTo(0.235 * wUnit, -1.02 * wUnit);
-  ctx.lineTo(0.265 * wUnit, -1.40 * wUnit);
-  ctx.lineTo(0.20 * wUnit, -1.47 * wUnit);
-  ctx.lineTo(-0.20 * wUnit, -1.47 * wUnit);
-  ctx.lineTo(-0.265 * wUnit, -1.40 * wUnit);
-  ctx.closePath(); ctx.fill();
-
-  /* vest plate lines */
-  ctx.strokeStyle = 'rgba(' + (58 * lit + 8 | 0) + ',' + (56 * lit + 8 | 0) + ',' + (46 * lit + 8 | 0) + ',.8)';
-  ctx.lineWidth = Math.max(0.6, 0.012 * wUnit);
-  ctx.beginPath();
-  ctx.moveTo(-0.16 * wUnit, -1.40 * wUnit);
-  ctx.lineTo(0.16 * wUnit, -1.40 * wUnit);
-  ctx.moveTo(0, -1.40 * wUnit);
-  ctx.lineTo(0, -1.05 * wUnit);
-  ctx.stroke();
-  /* shoulder straps */
-  ctx.fillStyle = dark;
-  ctx.fillRect(-0.27 * wUnit, -1.47 * wUnit, 0.14 * wUnit, 0.055 * wUnit);
-  ctx.fillRect(0.13 * wUnit, -1.47 * wUnit, 0.14 * wUnit, 0.055 * wUnit);
-
-  /* arms: out and slightly down */
-  ctx.fillStyle = tan(0.80);
-  ctx.lineCap = 'round';
-  ctx.lineWidth = 0.085 * wUnit;
-  ctx.strokeStyle = tan(0.80);
-  ctx.beginPath();
-  ctx.moveTo(-0.24 * wUnit, -1.40 * wUnit);
-  ctx.lineTo(-0.36 * wUnit, -1.18 * wUnit);
-  ctx.lineTo(-0.40 * wUnit, -1.00 * wUnit);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(0.24 * wUnit, -1.40 * wUnit);
-  ctx.lineTo(0.36 * wUnit, -1.18 * wUnit);
-  ctx.lineTo(0.40 * wUnit, -1.00 * wUnit);
-  ctx.stroke();
-  /* gloves */
-  ctx.fillStyle = dark;
-  ctx.beginPath(); ctx.arc(-0.405 * wUnit, -0.985 * wUnit, 0.045 * wUnit, 0, TAU); ctx.fill();
-  ctx.beginPath(); ctx.arc(0.405 * wUnit, -0.985 * wUnit, 0.045 * wUnit, 0, TAU); ctx.fill();
-
-  /* neck */
-  ctx.fillStyle = tan(0.7);
-  ctx.fillRect(-0.045 * wUnit, -1.55 * wUnit, 0.09 * wUnit, 0.09 * wUnit);
-
-  /* head + helmet */
-  ctx.fillStyle = tan(0.92);
-  ctx.beginPath();
-  ctx.ellipse(0, -1.68 * wUnit, 0.105 * wUnit, 0.125 * wUnit, 0, 0, TAU);
-  ctx.fill();
-  ctx.fillStyle = vest(0.90);
-  ctx.beginPath();
-  ctx.ellipse(0, -1.735 * wUnit, 0.115 * wUnit, 0.075 * wUnit, 0, Math.PI, TAU);
-  ctx.fill();
-  /* helmet rim */
-  ctx.fillStyle = 'rgba(' + (60 * lit + 8 | 0) + ',' + (58 * lit + 8 | 0) + ',' + (48 * lit + 8 | 0) + ',1)';
-  ctx.fillRect(-0.12 * wUnit, -1.735 * wUnit, 0.24 * wUnit, 0.018 * wUnit);
-  /* face shadow */
-  ctx.fillStyle = 'rgba(' + (52 * lit + 4 | 0) + ',' + (50 * lit + 4 | 0) + ',' + (40 * lit + 4 | 0) + ',.92)';
-  ctx.beginPath();
-  ctx.ellipse(0, -1.655 * wUnit, 0.072 * wUnit, 0.068 * wUnit, 0, 0, TAU);
-  ctx.fill();
-  /* visor glint */
-  ctx.fillStyle = t.hostile
-    ? 'rgba(255,64,42,.85)'
-    : 'rgba(' + (150 * lit + 20 | 0) + ',' + (160 * lit + 20 | 0) + ',' + (140 * lit + 20 | 0) + ',.55)';
-  ctx.fillRect(-0.055 * wUnit, -1.675 * wUnit, 0.11 * wUnit, 0.014 * wUnit);
-
-  /* side shading */
-  var sh = ctx.createLinearGradient(-0.42 * wUnit, 0, 0.42 * wUnit, 0);
-  sh.addColorStop(0, 'rgba(0,0,0,.34)');
-  sh.addColorStop(0.35, 'rgba(0,0,0,0)');
-  sh.addColorStop(0.75, 'rgba(0,0,0,.10)');
-  sh.addColorStop(1, 'rgba(0,0,0,.42)');
-  ctx.fillStyle = sh;
-  ctx.fillRect(-0.44 * wUnit, -1.86 * wUnit, 0.88 * wUnit, 1.86 * wUnit);
-
-  /* combat enemy indicators */
-  if (t.hostile) {
-    if (t.hp < t.maxHp) {
-      var bw = 0.78 * wUnit, bh = 0.075 * wUnit;
-      ctx.fillStyle = 'rgba(0,0,0,.62)';
-      ctx.fillRect(-bw / 2, -2.06 * wUnit, bw, bh);
-      ctx.fillStyle = '#e8533c';
-      ctx.fillRect(-bw / 2, -2.06 * wUnit, bw * clamp(t.hp / t.maxHp, 0, 1), bh);
-      ctx.strokeStyle = 'rgba(255,255,255,.18)';
-      ctx.lineWidth = Math.max(0.6, 0.012 * wUnit);
-      ctx.strokeRect(-bw / 2, -2.06 * wUnit, bw, bh);
+  /* build, cull and sort faces */
+  var faces = [];
+  for (var pi = 0; pi < parts.length; pi++) {
+    var pr = parts[pi];
+    var bb = pr.b;
+    var w = bb[1] - bb[0], h = bb[3] - bb[2], d = bb[5] - bb[4];
+    var f6 = boxFaces((bb[0] + bb[1]) / 2, bb[2], (bb[4] + bb[5]) / 2, w, h, d);
+    for (var fi = 0; fi < f6.length; fi++) {
+      var face = f6[fi];
+      var wp = [];
+      var cx = 0, cy2 = 0, cz = 0;
+      for (var vi = 0; vi < 4; vi++) {
+        var wpv = xf(face.p[vi][0], face.p[vi][1], face.p[vi][2], pr.o.noFall);
+        wp.push(wpv);
+        cx += wpv[0]; cy2 += wpv[1]; cz += wpv[2];
+      }
+      cx /= 4; cy2 /= 4; cz /= 4;
+      var wn = rotN(face.n, yaw, pr.o.noFall ? 0 : fall);
+      var vx = camPos[0] - cx, vy = camPos[1] - cy2, vz = camPos[2] - cz;
+      if (wn[0] * vx + wn[1] * vy + wn[2] * vz <= 0) continue;
+      var pp = projectPoly(wp, b, focal);
+      if (!pp) continue;
+      var lam = Math.max(0, wn[0] * LIGHT[0] + wn[1] * LIGHT[1] + wn[2] * LIGHT[2]);
+      var k = (0.46 + 0.62 * lam) * amb;
+      var col = pr.c;
+      var shade = fogMix([
+        clamp(col[0] * k | 0, 0, 255),
+        clamp(col[1] * k | 0, 0, 255),
+        clamp(col[2] * k | 0, 0, 255)
+      ], pp.z, 0);
+      faces.push({ pts: pp.pts, z: pp.z, color: shade, glow: pr.o.glow });
     }
-    if (t.flash > 0) {
+  }
+  faces.sort(function (a, c) { return c.z - a.z; });
+
+  for (var qi = 0; qi < faces.length; qi++) {
+    var q = faces[qi];
+    ctx.beginPath();
+    ctx.moveTo(q.pts[0].x, q.pts[0].y);
+    for (var yi = 1; yi < q.pts.length; yi++) ctx.lineTo(q.pts[yi].x, q.pts[yi].y);
+    ctx.closePath();
+    ctx.fillStyle = q.color;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.26)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+    if (q.glow) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      var mg = ctx.createRadialGradient(0.28 * wUnit, -1.24 * wUnit, 0, 0.28 * wUnit, -1.24 * wUnit, 0.38 * wUnit);
-      mg.addColorStop(0, 'rgba(255,225,170,' + (0.9 * t.flash).toFixed(2) + ')');
-      mg.addColorStop(1, 'rgba(255,150,50,0)');
-      ctx.fillStyle = mg;
-      ctx.beginPath(); ctx.arc(0.28 * wUnit, -1.24 * wUnit, 0.38 * wUnit, 0, TAU); ctx.fill();
+      ctx.fillStyle = 'rgba(255,70,45,.30)';
+      ctx.fill();
       ctx.restore();
     }
-    if (t.hurt > 0) {
+  }
+
+  /* enemy health bar */
+  if (t.hostile && t.hp < t.maxHp) {
+    var topP = projectPoint(xf(0, 1.88, 0), b, focal);
+    if (topP) {
+      var sPix = focal / dist * tscale;
+      var bw = 0.72 * sPix, bh = Math.max(3, 0.065 * sPix);
+      ctx.fillStyle = 'rgba(0,0,0,.62)';
+      ctx.fillRect(topP.x - bw / 2, topP.y, bw, bh);
+      ctx.fillStyle = '#e8533c';
+      ctx.fillRect(topP.x - bw / 2, topP.y, bw * clamp(t.hp / t.maxHp, 0, 1), bh);
+      ctx.strokeStyle = 'rgba(255,255,255,.18)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(topP.x - bw / 2, topP.y, bw, bh);
+    }
+  }
+
+  /* muzzle flash on hostiles */
+  if (t.hostile && t.flash > 0) {
+    var mp = projectPoint(xf(0.31, 1.29, 0.16), b, focal);
+    if (mp) {
+      var sF = focal / dist * tscale;
+      var rF = Math.max(4, 0.16 * sF);
       ctx.save();
-      ctx.globalAlpha = t.hurt * 0.30;
-      ctx.fillStyle = '#ff3220';
-      ctx.fillRect(-0.44 * wUnit, -1.9 * wUnit, 0.88 * wUnit, 1.9 * wUnit);
+      ctx.globalCompositeOperation = 'lighter';
+      var mg = ctx.createRadialGradient(mp.x, mp.y, 0, mp.x, mp.y, rF);
+      mg.addColorStop(0, 'rgba(255,228,175,' + (0.95 * t.flash).toFixed(2) + ')');
+      mg.addColorStop(1, 'rgba(255,150,50,0)');
+      ctx.fillStyle = mg;
+      ctx.beginPath(); ctx.arc(mp.x, mp.y, rF, 0, TAU); ctx.fill();
       ctx.restore();
     }
   }
